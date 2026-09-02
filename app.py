@@ -1357,8 +1357,15 @@ def preprocess_for_prediction(values):
 
     row=row.drop(columns=['Vehicle_ID'])
 
-    row=ml.target_encoder.transform(row)
-    row=row.rename(columns={'Make_and_Model':'Make_and_Model_Encoded'})
+    make_model_encoded=ml.target_encoder.transform(
+        row[['Make_and_Model']]
+    )
+
+    row['Make_and_Model_Encoded']=make_model_encoded['Make_and_Model']
+
+    row=row.drop(
+        columns=['Make_and_Model']
+    )
 
     row['Vehicle_Age']=ml.current_year-row['Year_of_Manufacture']
     row=row.drop(columns=['Year_of_Manufacture'])

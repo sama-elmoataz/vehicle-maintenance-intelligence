@@ -241,31 +241,32 @@ x_test=x_test.drop(columns=['Vehicle_ID'])
 
 
 # Make and Model - Target Encoding
+# Fit the encoder only on the Make_and_Model column.
+# This keeps the encoder independent from the number of other model features.
 target_encoder=TargetEncoder(
     cols=['Make_and_Model'],
     handle_missing='value',
     handle_unknown='value'
 )
 
-x_train=target_encoder.fit_transform(
-    x_train,
+make_model_train=target_encoder.fit_transform(
+    x_train[['Make_and_Model']],
     y_train
 )
 
-x_test=target_encoder.transform(
-    x_test
+make_model_test=target_encoder.transform(
+    x_test[['Make_and_Model']]
 )
 
-x_train=x_train.rename(
-    columns={
-        'Make_and_Model':'Make_and_Model_Encoded'
-    }
+x_train['Make_and_Model_Encoded']=make_model_train['Make_and_Model']
+x_test['Make_and_Model_Encoded']=make_model_test['Make_and_Model']
+
+x_train=x_train.drop(
+    columns=['Make_and_Model']
 )
 
-x_test=x_test.rename(
-    columns={
-        'Make_and_Model':'Make_and_Model_Encoded'
-    }
+x_test=x_test.drop(
+    columns=['Make_and_Model']
 )
 
 

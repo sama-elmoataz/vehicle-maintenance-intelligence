@@ -966,7 +966,6 @@ label_map=dict(
     .values
 )
 
-reverse_label_map={v:k for k,v in label_map.items()}
 
 
 def safe_number(value,default=0.0):
@@ -978,47 +977,14 @@ def safe_number(value,default=0.0):
         return float(default)
 
 
-def representative_example(level):
-    subset=ml.df[ml.df['Maintenance_Level']==level].copy()
-
-    categorical=[
-        'Make_and_Model','Vehicle_Type','Route_Info','Maintenance_Type',
-        'Brake_Condition','Weather_Conditions','Road_Conditions'
-    ]
-
-    example={}
-
-    for col in ml.x.columns:
-        if col=='Last_Maintenance_Date':
-            dates=pd.to_datetime(subset[col],errors='coerce').dropna().sort_values()
-            example[col]=dates.iloc[len(dates)//2].date()
-        elif col in categorical:
-            mode=subset[col].mode()
-            example[col]=mode.iloc[0] if len(mode)>0 else subset[col].iloc[0]
-        else:
-            series=pd.to_numeric(subset[col],errors='coerce').dropna()
-            value=float(series.median()) if len(series)>0 else 0.0
-            if col=='Year_of_Manufacture':
-                value=int(round(value))
-            example[col]=value
-
-    return example
-
-
-examples={
-    level:representative_example(level)
-    for level in label_map.values()
-}
-
-
 input_keys=[
     'Make_and_Model','Year_of_Manufacture','Vehicle_Type','Usage_Hours','Route_Info',
     'Load_Capacity','Actual_Load','Last_Maintenance_Date','Maintenance_Type',
     'Maintenance_Cost','Engine_Temperature','Tire_Pressure','Fuel_Consumption',
     'Battery_Status','Vibration_Levels','Oil_Quality','Brake_Condition',
-    'Failure_History','Anomalies_Detected','Predictive_Score',
+    'Failure_History','Anomalies_Detected',
     'Weather_Conditions','Road_Conditions','Delivery_Times',
-    'Downtime_Maintenance','Impact_on_Efficiency','Severity_Score'
+    'Downtime_Maintenance','Impact_on_Efficiency'
 ]
 
 
@@ -1051,37 +1017,8 @@ def build_default_values():
     return defaults
 
 
-def actual_example(level):
-    subset=ml.df[ml.df['Maintenance_Level']==level].copy()
-
-    if len(subset)==0:
-        return build_default_values()
-
-    # Use a real raw row from the dataset, not invented values.
-    row=subset.iloc[len(subset)//2]
-
-    values={}
-
-    for col in input_keys:
-        if col=='Last_Maintenance_Date':
-            value=pd.to_datetime(row[col],errors='coerce')
-            if pd.isna(value):
-                value=pd.Timestamp('2026-01-01')
-            values[col]=value.date()
-        elif col=='Year_of_Manufacture':
-            values[col]=int(row[col])
-        else:
-            values[col]=row[col]
-
-    return values
-
-
 default_values=build_default_values()
 
-examples={
-    level:actual_example(level)
-    for level in label_map.values()
-}
 
 
 if 'form_values' not in st.session_state:
@@ -1094,10 +1031,44 @@ if 'form_version' not in st.session_state:
 def replace_form_values(new_values):
     st.session_state.form_values=new_values.copy()
     st.session_state.form_version+=1
+    st.session_state.pop('last_prediction',None)
 
 
-def load_example(level):
-    replace_form_values(examples[level])
+def load_random_example():
+    available_indexes=list(ml.df.index)
+
+    if not available_indexes:
+        replace_form_values(default_values)
+        return
+
+    previous_index=st.session_state.get('random_example_index')
+
+    if len(available_indexes)>1 and previous_index in available_indexes:
+        available_indexes=[
+            idx for idx in available_indexes
+            if idx!=previous_index
+        ]
+
+    chosen_index=np.random.choice(available_indexes)
+    row=ml.df.loc[chosen_index]
+
+    values={}
+
+    for col in input_keys:
+        if col=='Last_Maintenance_Date':
+            value=pd.to_datetime(row[col],errors='coerce')
+            if pd.isna(value):
+                value=ml.reference_date
+            values[col]=value.date()
+
+        elif col=='Year_of_Manufacture':
+            values[col]=int(row[col])
+
+        else:
+            values[col]=row[col]
+
+    st.session_state.random_example_index=chosen_index
+    replace_form_values(values)
 
 
 def reset_form():
@@ -1350,13 +1321,11 @@ def preprocess_for_prediction(values):
         'Brake_Condition':values['Brake_Condition'],
         'Failure_History':values['Failure_History'],
         'Anomalies_Detected':values['Anomalies_Detected'],
-        'Predictive_Score':values['Predictive_Score'],
         'Weather_Conditions':values['Weather_Conditions'],
         'Road_Conditions':values['Road_Conditions'],
         'Delivery_Times':values['Delivery_Times'],
         'Downtime_Maintenance':values['Downtime_Maintenance'],
-        'Impact_on_Efficiency':values['Impact_on_Efficiency'],
-        'Severity_Score':values['Severity_Score']
+        'Impact_on_Efficiency':values['Impact_on_Efficiency']
     }])
 
     row['Vibration_Levels']=row['Vibration_Levels'].clip(lower=0)
@@ -1370,9 +1339,6 @@ def preprocess_for_prediction(values):
 
     row['Failure_History']=(row['Failure_History']>=0.5).astype(int)
     row['Anomalies_Detected']=(row['Anomalies_Detected']>=0.5).astype(int)
-
-    row['Predictive_Score']=row['Predictive_Score'].clip(lower=0.0,upper=1.0)
-    row['Predictive_Score']=np.log1p(row['Predictive_Score'])
 
     row['Weather_Conditions']=row['Weather_Conditions'].map({
         'Clear':0,'Rainy':1,'Snowy':2,'Windy':3
@@ -1388,7 +1354,6 @@ def preprocess_for_prediction(values):
     row['Downtime_Maintenance']=np.log1p(row['Downtime_Maintenance'])
 
     row['Impact_on_Efficiency']=np.log1p(row['Impact_on_Efficiency'])
-    row['Severity_Score']=np.log1p(row['Severity_Score'])
 
     row=row.drop(columns=['Vehicle_ID'])
 
@@ -1673,69 +1638,6 @@ def row_to_raw_values(row):
     return values
 
 
-def build_midrange_examples():
-    target_scores={
-        'Normal':22.0,
-        'Minor':60.0,
-        'Major':82.0
-    }
-
-    processed_all=pd.concat(
-        [ml.x_train,ml.x_test],
-        axis=0
-    ).sort_index()
-
-    probabilities=ml.rf.predict_proba(processed_all)
-    predicted_codes=ml.rf.predict(processed_all)
-
-    risk_scores=[]
-
-    for probs in probabilities:
-        risk_scores.append(
-            calculate_risk_score(probs)
-        )
-
-    score_df=pd.DataFrame(
-        {
-            'Predicted_Code':predicted_codes,
-            'Risk_Score':risk_scores
-        },
-        index=processed_all.index
-    )
-
-    selected_examples={}
-
-    for level,target in target_scores.items():
-        class_code=reverse_label_map[level]
-
-        true_level=ml.df.loc[
-            score_df.index,
-            'Maintenance_Level'
-        ]
-
-        candidates=score_df[
-            (score_df['Predicted_Code']==class_code)&
-            (true_level==level)
-        ].copy()
-
-        if len(candidates)==0:
-            selected_examples[level]=actual_example(level)
-            continue
-
-        chosen_index=(
-            candidates['Risk_Score']
-            .sub(target)
-            .abs()
-            .idxmin()
-        )
-
-        selected_examples[level]=row_to_raw_values(
-            ml.df.loc[chosen_index]
-        )
-
-    return selected_examples
-
-
 def build_condition_snapshot(values):
     load_capacity=max(float(values['Load_Capacity']),.01)
     actual_load=float(values['Actual_Load'])
@@ -1979,7 +1881,6 @@ def build_prediction_pdf(result,snapshot,priority):
 
 # Override the earlier examples with real dataset rows selected
 # to produce less-extreme, mid-range risk scores where available.
-examples=build_midrange_examples()
 
 
 def page_header(kicker,title,copy):
@@ -2494,58 +2395,35 @@ elif page=='Predict Maintenance':
     page_header(
         "Prediction lab",
         "Predict a vehicle's maintenance level",
-        "Enter vehicle information manually or load a realistic auto-fill example."
+        "Enter vehicle information manually or load a random vehicle record and predict its maintenance level."
     )
 
     st.markdown(
         '''
         <div class="example-box">
             <div style="font-size:1rem;font-weight:800;color:#101828;">
-                Try an auto-fill example
+                Try a random vehicle
             </div>
             <div style="color:#667085;font-size:.86rem;margin-top:4px;">
-                Each preset uses representative values from that maintenance class in your dataset.
+                Auto-fill loads a random real vehicle record without revealing its maintenance class.
+                Run the prediction to discover whether it is Normal, Minor or Major.
             </div>
         </div>
         ''',
         unsafe_allow_html=True
     )
 
-    ex1,ex2,ex3,ex4=st.columns(4)
-
-    available_levels=list(label_map.values())
+    ex1,ex2=st.columns(2)
 
     with ex1:
-        if len(available_levels)>0:
-            st.button(
-                "🟢 Normal Example",
-                use_container_width=True,
-                key="normal_example_button",
-                on_click=load_example,
-                args=(available_levels[0],)
-            )
+        st.button(
+            "🎲 Random Auto-Fill",
+            use_container_width=True,
+            key="random_example_button",
+            on_click=load_random_example
+        )
 
     with ex2:
-        if len(available_levels)>1:
-            st.button(
-                "🟠 Minor Example",
-                use_container_width=True,
-                key="minor_example_button",
-                on_click=load_example,
-                args=(available_levels[1],)
-            )
-
-    with ex3:
-        if len(available_levels)>2:
-            st.button(
-                "🔴 Major Example",
-                use_container_width=True,
-                key="major_example_button",
-                on_click=load_example,
-                args=(available_levels[2],)
-            )
-
-    with ex4:
         st.button(
             "↺ Reset Form",
             use_container_width=True,
@@ -2744,15 +2622,6 @@ elif page=='Predict Maintenance':
                 key=f'Anomalies_Detected_{v}'
             )
 
-            predictive=st.number_input(
-                "Predictive Score",
-                min_value=0.0,
-                max_value=1.0,
-                value=min(1.0,max(0.0,float(fv['Predictive_Score']))),
-                step=.01,
-                key=f'Predictive_Score_{v}'
-            )
-
             weather=st.selectbox(
                 "Weather Conditions",
                 categorical_values['Weather_Conditions'],
@@ -2782,6 +2651,7 @@ elif page=='Predict Maintenance':
                 key=f'Delivery_Times_{v}'
             )
 
+        with c:
             downtime=st.number_input(
                 "Downtime Maintenance",
                 value=float(fv['Downtime_Maintenance']),
@@ -2789,7 +2659,6 @@ elif page=='Predict Maintenance':
                 key=f'Downtime_Maintenance_{v}'
             )
 
-        with c:
             impact=st.number_input(
                 "Impact on Efficiency",
                 min_value=0.0,
@@ -2798,18 +2667,9 @@ elif page=='Predict Maintenance':
                 key=f'Impact_on_Efficiency_{v}'
             )
 
-            severity=st.number_input(
-                "Severity Score",
-                min_value=0.0,
-                value=max(0.0,float(fv['Severity_Score'])),
-                step=.01,
-                key=f'Severity_Score_{v}'
-            )
-
-            st.markdown("<div style='height:8px'></div>",unsafe_allow_html=True)
-            st.info(
-                "The prediction uses the trained Random Forest model and the same preprocessing logic used during training."
-            )
+        st.info(
+            "The prediction uses the final Random Forest model and the same preprocessing logic used during training."
+        )
 
         submitted=st.form_submit_button(
             "⚡ Predict Maintenance Level",
@@ -2837,13 +2697,11 @@ elif page=='Predict Maintenance':
             'Brake_Condition':brake,
             'Failure_History':failure,
             'Anomalies_Detected':anomalies,
-            'Predictive_Score':predictive,
             'Weather_Conditions':weather,
             'Road_Conditions':road,
             'Delivery_Times':delivery,
             'Downtime_Maintenance':downtime,
-            'Impact_on_Efficiency':impact,
-            'Severity_Score':severity
+            'Impact_on_Efficiency':impact
         }
 
         st.session_state.last_prediction=evaluate_vehicle(values)
@@ -3519,7 +3377,7 @@ elif page=='Data Insights':
 
         preview_cols=[
             'Make_and_Model','Vehicle_Type','Usage_Hours','Maintenance_Type',
-            'Oil_Quality','Brake_Condition','Severity_Score','Maintenance_Level'
+            'Oil_Quality','Brake_Condition','Maintenance_Level'
         ]
 
         st.dataframe(

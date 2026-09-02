@@ -1,8 +1,3 @@
-# Dataset / local data
-logistics_sample_15k (1).csv
-data/
-datasets/
-
 # Python cache
 __pycache__/
 *.py[cod]
